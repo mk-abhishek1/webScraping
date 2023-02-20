@@ -2,6 +2,6 @@
 
 #Clone repo
 
-#npm i
+#npm i - to install node modules
 
-#node datafile.js to run the app 
+#RUN: node index.js to run the app 
