@@ -1,59 +1,72 @@
 const puppeteer = require('puppeteer');
 const Tesseract = require('tesseract.js');
 const fs = require('fs');
+require('dotenv').config()
 
-const URL = "https://www.mca.gov.in/mcafoportal/viewCompanyMasterData.do"
-const COMPANYID = "U72900PN2011PTC139406"
+const URL = process.env.URL
+const COMPANYID = process.env.COMPANYID
+let companyDetails;
+const captchaImagePath = 'captchaImage.png';
 
-async function launch(url) {
-    let userEnteredCaptcha = "";
+(async () => {
+    console.log("Launching");
     const browser = await puppeteer.launch({
-        headless: true,
-        defaultViewport: false,
-    })
+        headless: false,
+        defaultViewport: null,
+    });
     const page = await browser.newPage();
 
     try {
-        await page.goto(url, { waitUntil: 'load', timeout: 0 });
+        await page.goto(URL, { waitUntil: 'load', timeout: 0 });
     } catch (error) {
-        console.log("something wrong with URL: " + url, error);
+        console.log("something wrong with URL: " + URL, error);
         await browser.close();
+        return;
     }
+    await page.type('#companyID', COMPANYID, { delay: 50 });
 
-    await page.type('#companyID', COMPANYID);
+    await solveCaptcha(page);
+    console.log(JSON.stringify(companyDetails, null, 2));
+    fs.writeFileSync('./companyDetails.json', JSON.stringify(companyDetails, null, 2));
+    await browser.close();
+})()
+
+async function solveCaptcha(page) {
     await page.waitForSelector('#captcha');
-    const logo = await page.$('#captcha');
-    await logo.screenshot({
-        path: 'captchaImage.png'
+    const captchaImage = await page.$('#captcha');
+
+    await captchaImage.evaluate((img) => {
+        return new Promise((resolve) => {
+            if (img.complete) {
+                resolve();
+            } else {
+                img.addEventListener('load', resolve);
+                img.addEventListener('error', resolve);
+            }
+        });
     });
 
-    const { data: { text } } = await Tesseract.recognize(
-        'captchaImage.png',
-        'eng',
-    );
-
+    await captchaImage.screenshot({ path: captchaImagePath });
+    const { data: { text } } = await Tesseract.recognize(captchaImagePath, 'eng');
     if (!text) {
-        console.log("InCorrect Captcha");
-        browser.close();
-        launch(URL);
+        await page.click('a[href="#"][onclick="javascript: return refreshCaptcha();"][id="captchaRefresh"] img[title="Refresh"]');
+        await solveCaptcha(page);
     } else {
-        page.waitForNavigation(),
-            console.log(text, "Captcha");
-        userEnteredCaptcha = text;
-    }
-
-    if (userEnteredCaptcha) {
-        await page.type('#userEnteredCaptcha', userEnteredCaptcha);
+        await page.type('#userEnteredCaptcha', text);
         try {
-            await page.waitForSelector('#msg_overlay', { timeout: 1000, visible: true });
-            await launch(URL);
+            const message = await page.waitForSelector('div.msg_overlay',
+                { polling: 100, timeout: 1000, visibility: true })
+            if (message) {
+                await page.waitForSelector('a.boxclose#msgboxclose', { timeout: 1000, visible: true });
+                await page.click('a.boxclose#msgboxclose');
+                await solveCaptcha(page);
+            }
         } catch (error) {
-            console.log("success");
+            console.log("...")
         }
-
         try {
-            await page.waitForSelector('#exportCompanyMasterData', { timeout: 0, visible: true });
-            const companyDetails = await page.$$eval('#exportCompanyMasterData', nodes => {
+            await page.waitForSelector('#exportCompanyMasterData', { timeout: 1000, visible: true });
+            companyDetails = await page.$$eval('#exportCompanyMasterData', nodes => {
                 return nodes.map(node => {
                     const detailTable = node.querySelector('#resultTab1');
                     const detailRows = Array.from(detailTable.querySelectorAll('tr'));
@@ -62,9 +75,8 @@ async function launch(url) {
                         const { textContent: key } = columns[0];
                         const { textContent: value } = columns[1];
                         object[key.trim()] = value.trim();
-                        return object
+                        return object;
                     }, {});
-
                     const detailDirectorsTable = node.querySelector('#resultTab6');
                     const detaiDirectorslRows = Array.from(detailDirectorsTable.querySelectorAll('tr'));
                     const Directors = detaiDirectorslRows.map(row => {
@@ -86,23 +98,11 @@ async function launch(url) {
                         LLP_MasterData,
                         Directors
                     }
-                })
+                });
             });
-            console.log(companyDetails);
-            fs.writeFileSync('./companyDetails.json', JSON.stringify(companyDetails));
-            await browser.close();
         } catch (error) {
-            console.error('Something went wrong:', error);
-            launch(URL);
+            console.error('Server Error/unhandled response');
         }
     }
-    try {
-        await page.waitForSelector('.dinsteps', { timeout: 1000, visible: true });
-        await launch(URL);
-    } catch (error) {
-        console.log("");
-    }
-    await browser.close();
 }
 
-launch(URL);
