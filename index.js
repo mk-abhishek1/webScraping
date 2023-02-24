@@ -53,6 +53,7 @@ async function solveCaptcha(page) {
         await solveCaptcha(page);
     } else {
         await page.type('#userEnteredCaptcha', text);
+        console.log('Captcha', text);
         try {
             const message = await page.waitForSelector('div.msg_overlay',
                 { polling: 100, timeout: 1000, visibility: true })
